@@ -15,13 +15,17 @@ window.__ModuleLoader__.load({
     const sessionBridge = { ctx: null, lastSessionId: undefined }
 
     // 取服务一律走这里：有的 ctx 对未注入的服务直接抛错，不能让整个插件跟着挂掉
+    const warnedServices = new Set()
     function safeService(ctx, name) {
       if (!ctx) return undefined
       try {
         const direct = ctx[name]
         if (direct !== undefined && direct !== null) return direct
       } catch (error) {
-        console.error('[six-yao] 服务属性不可用', name, error)
+        if (!warnedServices.has(name)) {
+          warnedServices.add(name)
+          console.error('[six-yao] 服务属性不可用', name, error)
+        }
       }
       try {
         if (typeof ctx.get === 'function') {
@@ -29,7 +33,10 @@ window.__ModuleLoader__.load({
           if (value !== undefined && value !== null) return value
         }
       } catch (error) {
-        console.error('[six-yao] 取服务失败', name, error)
+        if (!warnedServices.has(name)) {
+          warnedServices.add(name)
+          console.error('[six-yao] 取服务失败', name, error)
+        }
       }
       return undefined
     }
@@ -124,17 +131,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 每次桌面端启动（页面加载）跑一次：把所有还活着的解卦会话重新归档。
-     * 包括用户从「档案」里点开、已被我们取消归档的那些——重启后一律收回档案，
-     * 下次解卦从干净的会话开始。
+     * 扫一遍所有解卦会话并归档。
+     * - keepId：不归档的会话（发送后保留刚解的那一卦）
+     * - clearTracked：被跟踪的会话归档后，把 localStorage 里记录的 sessionId/casts 清掉
+     *
+     * 「启动归档」和「发送后清理」共用这一个实现，避免两套逻辑各自长歪。
+     * 页面刚加载时 sessions / uiWorkspace 可能还没注入，所以服务要在循环里反复取。
      */
-    let bootArchiveStarted = false
-    async function archiveDivinationOnBoot() {
-      if (bootArchiveStarted) return
-      bootArchiveStarted = true
+    async function sweepDivination({ keepId, clearTracked } = {}) {
       const ctx = sessionBridge.ctx
-      // 页面刚加载时 sessions / uiWorkspace 可能还没注入（ctx.get 会抛错），
-      // 所以要在这里反复取服务，而不是取一次失败就放弃。
       for (let attempt = 0; attempt < 30; attempt += 1) {
         const sessions = safeService(ctx, 'sessions')
         const workspace = safeService(ctx, 'uiWorkspace')
@@ -144,105 +149,71 @@ window.__ModuleLoader__.load({
         }
         const ws = workspaceSnapshot()
         const snapshot = listSnapshot(sessions)
-        if (ws && ws.phase === 'ready' && snapshot && snapshot.phase === 'ready') {
-          const archived = new Set(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : [])
-          const targets = new Set()
-          const tracked = loadDedicated().sessionId
-          if (tracked !== undefined && snapshot.byId && snapshot.byId[tracked] !== undefined && !archived.has(tracked)) {
-            targets.add(tracked)
+        if (!ws || ws.phase !== 'ready' || !snapshot || snapshot.phase !== 'ready') {
+          await wait(500)
+          continue
+        }
+        const archived = new Set(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : [])
+        const targets = new Set()
+        const tracked = loadDedicated().sessionId
+        if (tracked !== undefined && tracked !== keepId && snapshot.byId && snapshot.byId[tracked] !== undefined && !archived.has(tracked)) {
+          targets.add(tracked)
+        }
+        for (const id of snapshot.ids || []) {
+          if (id === keepId) continue
+          const row = snapshot.byId ? snapshot.byId[id] : undefined
+          if (!row || archived.has(id)) continue
+          if (row.projectionValues && row.projectionValues.agentPreset === DEDICATED_PRESET) targets.add(id)
+        }
+        for (const id of targets) {
+          try {
+            await workspace.archiveSession(id, { stopActivity: true })
+          } catch (error) {
+            console.error('[six-yao] 归档解卦会话失败', id, error)
           }
-          for (const id of snapshot.ids || []) {
-            const row = snapshot.byId ? snapshot.byId[id] : undefined
-            if (!row || archived.has(id)) continue
-            if (row.projectionValues && row.projectionValues.agentPreset === DEDICATED_PRESET) targets.add(id)
+          // 归档后会话可能直接从列表消失，所以当场记一笔，别指望回头还能扫到
+          const row = snapshot.byId ? snapshot.byId[id] : undefined
+          const store = loadDedicated()
+          if (!store.archives.some((entry) => entry.id === id)) {
+            store.archives = [{
+              id,
+              title: (row && row.displayTitle) || DEDICATED_TITLE,
+              casts: store.sessionId === id ? store.casts : 0,
+              at: Date.now(),
+            }, ...store.archives].slice(0, 50)
           }
-          for (const id of targets) {
-            try {
-              await workspace.archiveSession(id, { stopActivity: true })
-            } catch (error) {
-              console.error('[six-yao] 启动归档失败', id, error)
-            }
-            // 归档后会话可能直接从列表消失，所以当场记一笔，别指望回头还能扫到
-            const row = snapshot.byId ? snapshot.byId[id] : undefined
-            const store = loadDedicated()
-            if (!store.archives.some((entry) => entry.id === id)) {
-              store.archives = [{
-                id,
-                title: (row && row.displayTitle) || DEDICATED_TITLE,
-                casts: store.sessionId === id ? store.casts : 0,
-                at: Date.now(),
-              }, ...store.archives].slice(0, 50)
-            }
-            if (store.sessionId === id) {
-              store.sessionId = undefined
-              store.casts = 0
-            }
+          if (store.sessionId === id) {
+            store.sessionId = undefined
+            store.casts = 0
+          }
+          saveDedicated(store)
+        }
+        // 只有「确实归档了被跟踪的会话」或本来就没有跟踪对象时才清空记录；
+        // 否则会话还没加载出来就被清掉，下次又开一个，旧的就成了侧栏孤儿。
+        if (clearTracked && (tracked === undefined || targets.has(tracked))) {
+          const store = loadDedicated()
+          if (store.sessionId !== undefined) {
+            store.sessionId = undefined
+            store.casts = 0
             saveDedicated(store)
           }
-          const store = loadDedicated()
-          store.sessionId = undefined
-          store.casts = 0
-          saveDedicated(store)
-          collectArchivedDivination(store)
-          return
         }
-        await wait(500)
-      }
-    }
-
-    /**
-     * 解卦发送成功后跑一次：把除「刚刚这一卦」以外的解卦会话全部收回档案。
-     * 这样从「档案」点开又用过的旧会话、以及上一卦的会话，不会继续赖在侧栏里，
-     * 也不用等下一次解卦或手动刷新页面。
-     */
-    async function archiveStaleDedicated(keepId) {
-      const ctx = sessionBridge.ctx
-      const sessions = safeService(ctx, 'sessions')
-      const workspace = safeService(ctx, 'uiWorkspace')
-      if (!sessions || !workspace || typeof workspace.archiveSession !== 'function') return undefined
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        const ws = workspaceSnapshot()
-        const snapshot = listSnapshot(sessions)
-        if (ws && ws.phase === 'ready' && snapshot && snapshot.phase === 'ready') {
-          const archived = new Set(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : [])
-          const targets = new Set()
-          const store = loadDedicated()
-          if (store.sessionId !== undefined && store.sessionId !== keepId && !archived.has(store.sessionId)) {
-            targets.add(store.sessionId)
-          }
-          for (const id of snapshot.ids || []) {
-            if (id === keepId) continue
-            const row = snapshot.byId ? snapshot.byId[id] : undefined
-            if (!row || archived.has(id)) continue
-            if (row.projectionValues && row.projectionValues.agentPreset === DEDICATED_PRESET) targets.add(id)
-          }
-          for (const id of targets) {
-            try {
-              await workspace.archiveSession(id, { stopActivity: true })
-            } catch (error) {
-              console.error('[six-yao] 发送后归档旧会话失败', id, error)
-            }
-            const latest = loadDedicated()
-            const row = snapshot.byId ? snapshot.byId[id] : undefined
-            if (!latest.archives.some((entry) => entry.id === id)) {
-              latest.archives = [{
-                id,
-                title: (row && row.displayTitle) || DEDICATED_TITLE,
-                casts: 0,
-                at: Date.now(),
-              }, ...latest.archives].slice(0, 50)
-            }
-            if (latest.sessionId === id) {
-              latest.sessionId = undefined
-              latest.casts = 0
-            }
-            saveDedicated(latest)
-          }
-          return collectArchivedDivination(loadDedicated())
-        }
-        await wait(500)
+        return collectArchivedDivination(loadDedicated())
       }
       return undefined
+    }
+
+    /** 每次桌面端启动（页面加载）跑一次：把所有还活着的解卦会话重新归档 */
+    let bootArchiveStarted = false
+    async function archiveDivinationOnBoot() {
+      if (bootArchiveStarted) return
+      bootArchiveStarted = true
+      return sweepDivination({ clearTracked: true })
+    }
+
+    /** 解卦发送成功后跑一次：把除「刚刚这一卦」以外的解卦会话全部收回档案 */
+    async function archiveStaleDedicated(keepId) {
+      return sweepDivination({ keepId, clearTracked: false })
     }
 
     /** 找一个确定的工作区：优先「最近聊过的会话所在的那个」，兜底取第一个 */
@@ -755,28 +726,16 @@ window.__ModuleLoader__.load({
       return lines.join('\n')
     }
 
-    function sessionCandidates() {
-      const ctx = sessionBridge.ctx
-      const sessions = safeService(ctx, 'sessions')
-      if (!sessions || typeof sessions.retain !== 'function') return { sessions: null, ids: [] }
-      const ids = []
-      if (sessionBridge.lastSessionId !== undefined) ids.push(sessionBridge.lastSessionId)
-      try {
-        const state = sessions.list.getSnapshot()
-        for (const id of state.ids || []) {
-          if (ids.length >= 3) break
-          if (!ids.includes(id)) ids.push(id)
-        }
-      } catch (error) {
-        console.error('[six-yao] 读取会话列表失败', error)
-      }
-      return { sessions, ids }
+    function sessionService() {
+      const sessions = safeService(sessionBridge.ctx, 'sessions')
+      if (!sessions || typeof sessions.retain !== 'function') return null
+      return sessions
     }
 
     async function askAgent(text) {
       const ctx = sessionBridge.ctx
       if (!ctx) return { ok: false, reason: 'no-ctx' }
-      const { sessions, ids } = sessionCandidates()
+      const sessions = sessionService()
       if (!sessions) return { ok: false, reason: 'no-sessions' }
 
       // 优先进「解卦专用区」：专用 preset 零工具、最低档位，整张工具表都不进上下文
@@ -787,9 +746,8 @@ window.__ModuleLoader__.load({
         console.error('[six-yao] 专用区准备失败', error)
         dedicated = { sessionId: undefined, store: loadDedicated(), fresh: false }
       }
-      const candidates = dedicated && dedicated.sessionId !== undefined
-        ? [dedicated.sessionId, ...ids.filter((id) => id !== dedicated.sessionId)]
-        : ids
+      // 只发专用区。专用区建不起来就退回复制，绝不把问卦内容塞进用户别的对话里。
+      const candidates = dedicated && dedicated.sessionId !== undefined ? [dedicated.sessionId] : []
       if (!candidates.length) return { ok: false, reason: 'no-session' }
 
       let lastReason = 'failed'
@@ -852,6 +810,10 @@ window.__ModuleLoader__.load({
       const timer = useRef(null)
       const inputRef = useRef(null)
       const castTimer = useRef(null)
+      // React 的 state 更新是异步的，连点两下可能都通过 `if (!sending)`；
+      // 用 ref 当同步闸门，防止一发两卦 / 连发两次。
+      const sendingRef = useRef(false)
+      const castingRef = useRef(false)
 
       useEffect(() => {
         const el = document.createElement('style')
@@ -880,7 +842,7 @@ window.__ModuleLoader__.load({
       }
 
       const cast = () => {
-        if (casting) return
+        if (castingRef.current) return
         const q = question.trim()
         if (!q) {
           setHint('先写下所问的事，再起卦。一事一卦。')
@@ -888,6 +850,7 @@ window.__ModuleLoader__.load({
           return
         }
         setHint('')
+        castingRef.current = true
         setCasting(true)
         castTimer.current = setTimeout(() => {
           try {
@@ -902,6 +865,7 @@ window.__ModuleLoader__.load({
             console.error('[six-yao] cast failed', error)
             setToast('起卦时出了点问题，请再试一次')
           } finally {
+            castingRef.current = false
             setCasting(false)
           }
         }, 700)
@@ -970,7 +934,8 @@ window.__ModuleLoader__.load({
       }
 
       const askCurrent = () => {
-        if (!current || sending) return
+        if (!current || sendingRef.current) return
+        sendingRef.current = true
         setSending(true)
         askAgent(promptFor(current.record, current.hex))
           .catch((error) => {
@@ -978,7 +943,6 @@ window.__ModuleLoader__.load({
             return { ok: false, reason: 'failed' }
           })
           .then((res) => {
-            setSending(false)
             setDedicated(reconcileDedicated())
             if (res.ok) {
               // 发送成功后立刻把上一卦/上一个打开过的档案收回档案，别赖在侧栏里
@@ -994,6 +958,10 @@ window.__ModuleLoader__.load({
                     : '发送出错'
             const copied = copyText(reportOf(current.hex))
             showToast(why + (copied ? '，已复制排盘' : '，可点「复制排盘」'), 6000)
+          })
+          .finally(() => {
+            sendingRef.current = false
+            setSending(false)
           })
       }
 
