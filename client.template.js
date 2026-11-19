@@ -133,10 +133,15 @@ window.__ModuleLoader__.load({
       if (bootArchiveStarted) return
       bootArchiveStarted = true
       const ctx = sessionBridge.ctx
-      const sessions = safeService(ctx, 'sessions')
-      const workspace = safeService(ctx, 'uiWorkspace')
-      if (!sessions || !workspace || typeof workspace.archiveSession !== 'function') return
-      for (let attempt = 0; attempt < 10; attempt += 1) {
+      // 页面刚加载时 sessions / uiWorkspace 可能还没注入（ctx.get 会抛错），
+      // 所以要在这里反复取服务，而不是取一次失败就放弃。
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const sessions = safeService(ctx, 'sessions')
+        const workspace = safeService(ctx, 'uiWorkspace')
+        if (!sessions || !workspace || typeof workspace.archiveSession !== 'function') {
+          await wait(500)
+          continue
+        }
         const ws = workspaceSnapshot()
         const snapshot = listSnapshot(sessions)
         if (ws && ws.phase === 'ready' && snapshot && snapshot.phase === 'ready') {
@@ -181,7 +186,7 @@ window.__ModuleLoader__.load({
           collectArchivedDivination(store)
           return
         }
-        await wait(1000)
+        await wait(500)
       }
     }
 
