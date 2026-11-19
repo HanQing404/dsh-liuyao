@@ -1,0 +1,62 @@
+{
+  "name": "dsh-liuyao",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "六爻纳甲解卦：起卦、装卦、用神旺衰、应期与趋避，含 Web 面板与 agent 工具。",
+  "license": "MIT",
+  "author": "HanQing404",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "i-ching",
+    "divination",
+    "六爻",
+    "解卦"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HanQing404/dsh-liuyao"
+  },
+  "homepage": "https://github.com/HanQing404/dsh-liuyao",
+  "engines": {
+    "dsh": ">=0.2.2-rc.5 <0.3.0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./preset": "./preset-restrict.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "preset-restrict.js",
+    "client.js",
+    "engine/core-data.js",
+    "engine/calendar.js",
+    "engine/hexagram.js",
+    "engine/render.js",
+    "engine/classics.json",
+    "engine/hexagram-meanings.json",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md",
+    "docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

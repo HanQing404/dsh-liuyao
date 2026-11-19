@@ -1,0 +1,12 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="5" y="5" width="26" height="26" rx="7" fill="#4D6BFE"/>
+  <g fill="#FFFFFF">
+    <!-- 上/下三爻：阳爻整条、阴爻断开，中间两爻为动爻（以圆点示意） -->
+    <rect x="10" y="9.6" width="16" height="2" rx="1"/>
+    <rect x="10" y="14.4" width="6.4" height="2" rx="1"/>
+    <rect x="19.6" y="14.4" width="6.4" height="2" rx="1"/>
+    <rect x="10" y="19.2" width="16" height="2" rx="1"/>
+    <rect x="10" y="24" width="16" height="2" rx="1"/>
+  </g>
+  <circle cx="18" cy="15.4" r="2.1" fill="#41E1AC"/>
+</svg>

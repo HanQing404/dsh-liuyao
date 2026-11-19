@@ -1,0 +1,20 @@
+- insert:
+    - id: six-yao
+      name: 'dsh-liuyao'
+    - id: preset-liuyao
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: liuyao
+        name: 解卦
+        description: 六爻解卦专用会话：不挂任何工具；盘面由面板在本机排好，随消息一起带进来。
+        order: 90
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                你是六爻解卦助手。只做解卦。面板已经在本机排好卦盘，摘要就在消息里：
+                直接按用神旺衰、动变、月建日辰断吉凶，给出应期与趋避，用白话讲清楚；
+                不要调用工具、不要复述盘面。不要承担与解卦无关的任务。
+          - id: restrict
+            name: 'dsh-liuyao/preset'
