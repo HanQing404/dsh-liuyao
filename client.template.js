@@ -185,6 +185,61 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * 解卦发送成功后跑一次：把除「刚刚这一卦」以外的解卦会话全部收回档案。
+     * 这样从「档案」点开又用过的旧会话、以及上一卦的会话，不会继续赖在侧栏里，
+     * 也不用等下一次解卦或手动刷新页面。
+     */
+    async function archiveStaleDedicated(keepId) {
+      const ctx = sessionBridge.ctx
+      const sessions = safeService(ctx, 'sessions')
+      const workspace = safeService(ctx, 'uiWorkspace')
+      if (!sessions || !workspace || typeof workspace.archiveSession !== 'function') return undefined
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const ws = workspaceSnapshot()
+        const snapshot = listSnapshot(sessions)
+        if (ws && ws.phase === 'ready' && snapshot && snapshot.phase === 'ready') {
+          const archived = new Set(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : [])
+          const targets = new Set()
+          const store = loadDedicated()
+          if (store.sessionId !== undefined && store.sessionId !== keepId && !archived.has(store.sessionId)) {
+            targets.add(store.sessionId)
+          }
+          for (const id of snapshot.ids || []) {
+            if (id === keepId) continue
+            const row = snapshot.byId ? snapshot.byId[id] : undefined
+            if (!row || archived.has(id)) continue
+            if (row.projectionValues && row.projectionValues.agentPreset === DEDICATED_PRESET) targets.add(id)
+          }
+          for (const id of targets) {
+            try {
+              await workspace.archiveSession(id, { stopActivity: true })
+            } catch (error) {
+              console.error('[six-yao] 发送后归档旧会话失败', id, error)
+            }
+            const latest = loadDedicated()
+            const row = snapshot.byId ? snapshot.byId[id] : undefined
+            if (!latest.archives.some((entry) => entry.id === id)) {
+              latest.archives = [{
+                id,
+                title: (row && row.displayTitle) || DEDICATED_TITLE,
+                casts: 0,
+                at: Date.now(),
+              }, ...latest.archives].slice(0, 50)
+            }
+            if (latest.sessionId === id) {
+              latest.sessionId = undefined
+              latest.casts = 0
+            }
+            saveDedicated(latest)
+          }
+          return collectArchivedDivination(loadDedicated())
+        }
+        await wait(500)
+      }
+      return undefined
+    }
+
     /** 找一个确定的工作区：优先「最近聊过的会话所在的那个」，兜底取第一个 */
     function pickWorkspaceId(sessions) {
       const workspaces = safeService(sessionBridge.ctx, 'workspaces')
@@ -920,7 +975,13 @@ window.__ModuleLoader__.load({
           .then((res) => {
             setSending(false)
             setDedicated(reconcileDedicated())
-            if (res.ok) return
+            if (res.ok) {
+              // 发送成功后立刻把上一卦/上一个打开过的档案收回档案，别赖在侧栏里
+              archiveStaleDedicated(res.sessionId)
+                .then((store) => { if (store) setDedicated(store) })
+                .catch((error) => console.error('[six-yao] 发送后归档失败', error))
+              return
+            }
             const why = res.reason === 'no-session' ? '没有可用的对话'
               : res.reason === 'no-sessions' ? '读不到会话服务'
                 : res.reason === 'rejected' ? '对话拒绝了这条消息'
