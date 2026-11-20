@@ -2300,12 +2300,7 @@ const MODULES = {
           )),
         ),
         h('div', { className: 'foot' }, analysis.useGod.useNote),
-      )
-    }
-
-    function Reading({ hex, analysis, onAsk, onCopy, sending }) {
-      return h('div', null,
-        h('h3', { style: { marginTop: 0 } }, '应期'),
+        h('h3', null, '应期'),
         h('ul', { className: 'list' },
           analysis.timing.map((t, i) => h('li', { key: i }, h('strong', null, t.basis + '：'), t.text)),
         ),
@@ -2313,8 +2308,6 @@ const MODULES = {
         h('ul', { className: 'list' }, analysis.spirits.map((s, i) => h('li', { key: i }, s))),
         h('h3', null, '趋避建议'),
         h('ul', { className: 'list' }, analysis.tips.map((t, i) => h('li', { key: i }, t))),
-        h('div', { className: 'row', style: { marginTop: '16px' } }, h(CopyButton, { onAsk, onCopy, sending })),
-        h('div', { className: 'foot' }, '点「让 Agent 细解」，这一卦会直接发进你正在用的那个对话。'),
       )
     }
 
@@ -2639,7 +2632,6 @@ const MODULES = {
 
       const tabs = [
         ['overview', '卦盘'],
-        ['reading', '断语'],
         ['classic', '经传'],
         ['history', history.length ? '历史 · ' + history.length : '历史'],
         ['archive', dedicated.archives.length ? '档案 · ' + dedicated.archives.length : '档案'],
@@ -2756,9 +2748,7 @@ const MODULES = {
                 )
                 : tab === 'overview'
                   ? h(Overview, { hex: current.hex, analysis, onAsk: askCurrent, onCopy: copyReport, sending })
-                  : tab === 'reading'
-                    ? h(Reading, { hex: current.hex, analysis, onAsk: askCurrent, onCopy: copyReport, sending })
-                    : h(Classics, { hex: current.hex }),
+                  : h(Classics, { hex: current.hex }),
 
             h('div', { className: 'foot' },
               '断卦以「用神」为核心，兼顾月建日辰、动变、旬空月破；卦爻辞依《周易》经传原文。',
