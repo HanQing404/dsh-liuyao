@@ -191,7 +191,8 @@ window.__ModuleLoader__.load({
         }
         const ws = workspaceSnapshot()
         const snapshot = listSnapshot(sessions)
-        if (!ws || ws.phase !== 'ready' || !snapshot || snapshot.phase !== 'ready') {
+        // ids 为空也可能是「刚就绪还没加载出会话」，再等等，别把它当成没会话直接收工
+        if (!ws || ws.phase !== 'ready' || !snapshot || snapshot.phase !== 'ready' || !snapshot.ids || !snapshot.ids.length) {
           await wait(500)
           continue
         }
@@ -934,6 +935,10 @@ window.__ModuleLoader__.load({
             // 点开之后它就不是「档案」了；下次发送后 sweep 要是再归档它，会重新记回来
             setDedicated(forgetArchive(entry.id))
             showToast('已打开这条存档')
+            // 同一时间只留一个解卦会话活着：把其余的解卦会话收回档案，避免出现两个专用区
+            archiveStaleDedicated(entry.id)
+              .then((store) => { if (store && aliveRef.current) setDedicated(store) })
+              .catch((error) => console.error('[six-yao] 打开档案后归档其余解卦会话失败', error))
           } catch (error) {
             console.error('[six-yao] 打开存档失败', error)
             showToast('打不开这条存档')
